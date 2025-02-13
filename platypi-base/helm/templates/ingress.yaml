@@ -1,0 +1,13 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: platypi-base-ingressroute
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`platypi-base.local`)
+      kind: Rule
+      services:
+        - name: platypi-base-svc
+          port: 80

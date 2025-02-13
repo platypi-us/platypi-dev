@@ -1,0 +1,6 @@
+apiVersion: v2
+name: platypi-base
+description: a quick start to create a basic nginx deployment, service, ingress,and serviceAccount
+type: application
+version: 0.0.1
+appVersion: "0.0.1"
