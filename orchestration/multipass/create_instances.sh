@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 
 # variables
-export CP01_IP="192.168.64.101";
-export WORKER01_IP="192.168.64.111";
-export WORKER02_IP="192.168.64.112";
+export FIRST_3="192.168.64";
+export SUBNET="${FIRST_3}.0/24";
+export LOCAL_GW="${FIRST_3}.1";
+export CP01_IP="${FIRST_3}.101";
+export WORKER01_IP="${FIRST_3}.111";
+export WORKER02_IP="${FIRST_3}.112";
+export WORKER03_IP="${FIRST_3}.113";
+
+# mac 
+# sudo ifconfig lo0 alias "${LOCAL_GW}";
+# sudo route -n add -net "${SUBNET}" "${LOCAL_GW}"
+
 
 # create instances
 ## cp01
-multipass launch --disk 10G --memory 3G --cpus 2 --name cp01 --network name=en0,mode=manual,mac="52:54:00:4b:ab:cd" file://debian-13-generic-arm64-20250911-2232.qcow2;
+multipass launch --disk 10G --memory 3G --cpus 2 --name cp01 --network name=en0,mode=manual,mac="52:54:00:4b:ab:cd" --bridged file://../images/debian-13-generic-arm64.qcow2;
 
 multipass exec -n cp01 -- sudo bash -c "cat << EOF > /etc/netplan/10-custom.yaml
 network:
@@ -24,7 +33,7 @@ multipass exec -n cp01 -- sudo netplan apply;
 
 
 ## worker01
-multipass launch --disk 10G --memory 3G --cpus 2 --name worker01 --network name=en0,mode=manual,mac="52:54:00:4b:ba:dc" file://debian-13-generic-arm64-20250911-2232.qcow2;
+multipass launch --disk 10G --memory 3G --cpus 2 --name worker01 --network name=en0,mode=manual,mac="52:54:00:4b:ba:dc" --bridged file://../images/debian-13-generic-arm64.qcow2;
 
 
 multipass exec -n worker01 -- sudo bash -c "cat << EOF > /etc/netplan/10-custom.yaml
@@ -41,7 +50,7 @@ EOF";
 multipass exec -n worker01 -- sudo netplan apply;
 
 ## worker02
-multipass launch --disk 10G --memory 3G --cpus 2 --name worker02 --network name=en0,mode=manual,mac="52:54:00:4b:cd:ab" file://debian-13-generic-arm64-20250911-2232.qcow2;
+multipass launch --disk 10G --memory 3G --cpus 2 --name worker02 --network name=en0,mode=manual,mac="52:54:00:4b:cd:ab" --bridged file://../images/debian-13-generic-arm64.qcow2;
 
 multipass exec -n worker02 -- sudo bash -c "cat << EOF > /etc/netplan/10-custom.yaml
 network:
@@ -56,12 +65,31 @@ EOF";
 
 multipass exec -n worker02 -- sudo netplan apply;
 
+# worker03
+
+multipass launch --disk 10G --memory 3G --cpus 2 --name worker03 --network name=en0,mode=manual,mac="52:54:00:4b:cd:ac" --bridgedfile://../images/debian-13-generic-arm64.qcow2;
+
+multipass exec -n worker03 -- sudo bash -c "cat << EOF > /etc/netplan/10-custom.yaml
+network:
+  version: 2
+  ethernets:
+    extra0:
+      dhcp4: no
+      match:
+        macaddress: "52:54:00:4b:cd:ac"
+      addresses: [${WORKER03_IP}/24]
+EOF";
+
+multipass exec -n worker03 -- sudo netplan apply;
+
+
 # /etc/hosts
 ## cp01
 multipass exec -n cp01 -- sudo bash -c "cat << EOF >> /etc/hosts
 ${CP01_IP} cp01 cp01
 ${WORKER01_IP} worker01 worker01
 ${WORKER02_IP} worker02 worker02
+${WORKER03_IP} worker03 worker03
 EOF";
 
 ## worker01
@@ -69,6 +97,7 @@ multipass exec -n worker01 -- sudo bash -c "cat << 'EOF' >> /etc/hosts
 ${CP01_IP} cp01 cp01
 ${WORKER01_IP} worker01 worker01
 ${WORKER02_IP} worker02 worker02
+${WORKER03_IP} worker03 worker03
 EOF";
 
 ## worker02
@@ -76,6 +105,15 @@ multipass exec -n worker02 -- sudo bash -c "cat << 'EOF' >> /etc/hosts
 ${CP01_IP} cp01 cp01
 ${WORKER01_IP} worker01 worker01
 ${WORKER02_IP} worker02 worker02
+${WORKER03_IP} worker03 worker03
+EOF";
+
+## worker03
+multipass exec -n worker03 -- sudo bash -c "cat << 'EOF' >> /etc/hosts
+${CP01_IP} cp01 cp01
+${WORKER01_IP} worker01 worker01
+${WORKER02_IP} worker02 worker02
+${WORKER03_IP} worker03 worker03
 EOF";
 
 # kubernetes prerequisites
@@ -139,6 +177,26 @@ multipass exec -n worker02 -- sudo sysctl --system;
 multipass exec -n worker02 -- sudo bash -c "swapoff -a";
 multipass exec -n worker02 -- sudo bash -c "sed -i '/ swap / s/^/#/' /etc/fstab"
 
+## worker03
+multipass exec -n worker03 -- sudo bash -c "cat <<EOF | tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF";
+
+multipass exec -n worker03 -- sudo modprobe overlay;
+multipass exec -n worker03 -- sudo modprobe br_netfilter;
+
+multipass exec -n worker03 -- sudo bash -c "cat <<EOF | tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF";
+
+multipass exec -n worker03 -- sudo sysctl --system;
+
+multipass exec -n worker03 -- sudo bash -c "swapoff -a";
+multipass exec -n worker03 -- sudo bash -c "sed -i '/ swap / s/^/#/' /etc/fstab"
+
 # Install containerd
 ## cp01
 multipass exec -n cp01 -- sudo bash -c "curl -LO https://github.com/containerd/containerd/releases/download/v2.1.4/containerd-2.1.4-linux-arm64.tar.gz";
@@ -185,6 +243,21 @@ multipass exec -n worker02 -- sudo bash -c "systemctl daemon-reload";
 multipass exec -n worker02 -- sudo bash -c "systemctl enable --now containerd";
 multipass exec -n worker02 -- sudo bash -c "systemctl status containerd";
 
+## worker03
+multipass exec -n worker03 -- sudo bash -c "curl -LO https://github.com/containerd/containerd/releases/download/v2.1.4/containerd-2.1.4-linux-arm64.tar.gz";
+multipass exec -n worker03 -- sudo bash -c "tar Cxzvf /usr/local containerd-2.1.4-linux-arm64.tar.gz";
+multipass exec -n worker03 -- sudo bash -c "curl -LO https://raw.githubusercontent.com/containerd/containerd/main/containerd.service";
+multipass exec -n worker03 -- sudo bash -c "mkdir -p /usr/local/lib/systemd/system/";
+multipass exec -n worker03 -- sudo bash -c "cp containerd.service /usr/local/lib/systemd/system/";
+multipass exec -n worker03 -- sudo bash -c "mkdir -p /etc/containerd/";
+multipass exec -n worker03 -- sudo bash -c "touch /etc/containerd/config.toml";
+multipass exec -n worker03 -- sudo bash -c "containerd config default | tee ./config.toml";
+multipass exec -n worker03 -- sudo bash -c "cp -f config.toml /etc/containerd/config.toml";
+multipass exec -n worker03 -- sudo bash -c "sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml";
+multipass exec -n worker03 -- sudo bash -c "systemctl daemon-reload";
+multipass exec -n worker03 -- sudo bash -c "systemctl enable --now containerd";
+multipass exec -n worker03 -- sudo bash -c "systemctl status containerd";
+
 # install runc
 ## cp01
 multipass exec -n cp01 -- sudo bash -c "curl -LO https://github.com/opencontainers/runc/releases/download/v1.3.1/runc.arm64";
@@ -197,6 +270,10 @@ multipass exec -n worker01 -- sudo bash -c "install -m 755 runc.arm64 /usr/local
 ## worker02
 multipass exec -n worker02 -- sudo bash -c "curl -LO https://github.com/opencontainers/runc/releases/download/v1.3.1/runc.arm64";
 multipass exec -n worker02 -- sudo bash -c "install -m 755 runc.arm64 /usr/local/sbin/runc";
+
+## worker03
+multipass exec -n worker03 -- sudo bash -c "curl -LO https://github.com/opencontainers/runc/releases/download/v1.3.1/runc.arm64";
+multipass exec -n worker03 -- sudo bash -c "install -m 755 runc.arm64 /usr/local/sbin/runc";
 
 # install CNI plugins
 ## cp01
@@ -213,6 +290,11 @@ multipass exec -n worker01 -- sudo bash -c "tar Cxzvf /opt/cni/bin cni-plugins-l
 multipass exec -n worker02 -- sudo bash -c "curl -LO https://github.com/containernetworking/plugins/releases/download/v1.8.0/cni-plugins-linux-arm64-v1.8.0.tgz";
 multipass exec -n worker02 -- sudo bash -c "mkdir -p /opt/cni/bin"
 multipass exec -n worker02 -- sudo bash -c "tar Cxzvf /opt/cni/bin cni-plugins-linux-arm64-v1.8.0.tgz"
+
+## worker03
+multipass exec -n worker03 -- sudo bash -c "curl -LO https://github.com/containernetworking/plugins/releases/download/v1.8.0/cni-plugins-linux-arm64-v1.8.0.tgz";
+multipass exec -n worker03 -- sudo bash -c "mkdir -p /opt/cni/bin"
+multipass exec -n worker03 -- sudo bash -c "tar Cxzvf /opt/cni/bin cni-plugins-linux-arm64-v1.8.0.tgz"
 
 # Install kubeadm, kubelet, and kubectl
 ## cp01
@@ -242,6 +324,15 @@ multipass exec -n worker02 -- sudo bash -c "apt-get update";
 multipass exec -n worker02 -- sudo bash -c "apt-get install -y kubelet kubeadm kubectl";
 multipass exec -n worker02 -- sudo bash -c "apt-mark hold kubelet kubeadm kubectl";
 
+## worker03
+multipass exec -n worker03 -- sudo bash -c "apt-get update";
+multipass exec -n worker03 -- sudo bash -c "apt-get install -y apt-transport-https ca-certificates curl gpg";
+multipass exec -n worker03 -- sudo bash -c "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg";
+multipass exec -n worker03 -- sudo bash -c "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list";
+multipass exec -n worker03 -- sudo bash -c "apt-get update";
+multipass exec -n worker03 -- sudo bash -c "apt-get install -y kubelet kubeadm kubectl";
+multipass exec -n worker03 -- sudo bash -c "apt-mark hold kubelet kubeadm kubectl";
+
 # configure crictl to work with containerd
 ## cp01
 multipass exec -n cp01 -- sudo bash -c "crictl config runtime-endpoint unix:///var/run/containerd/containerd.sock
@@ -253,6 +344,10 @@ multipass exec -n worker01 -- sudo bash -c "crictl config runtime-endpoint unix:
 
 ## worker02
 multipass exec -n worker02 -- sudo bash -c "crictl config runtime-endpoint unix:///var/run/containerd/containerd.sock
+";
+
+## worker03
+multipass exec -n worker03 -- sudo bash -c "crictl config runtime-endpoint unix:///var/run/containerd/containerd.sock
 ";
 
 # Initialize the control plane; cp01 only
@@ -292,6 +387,9 @@ multipass exec -n worker01 -- sudo bash -c "${JOIN_COMMAND}";
 
 ## worker02
 multipass exec -n worker02 -- sudo bash -c "${JOIN_COMMAND}";
+
+## worker03
+multipass exec -n worker03 -- sudo bash -c "${JOIN_COMMAND}";
 
 # move kube config to local filesystem
 multipass exec -n cp01 -- bash -c 'cat ~/.kube/config' > local.kubeconfig;
