@@ -1,0 +1,4 @@
+---
+users:
+  - name: ppi
+    sudo: "ALL=(ALL) NOPASSWD:ALL"

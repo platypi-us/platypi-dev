@@ -16,8 +16,14 @@ export WORKER03_IP="${FIRST_3}.113";
 
 # create instances
 ## cp01
-multipass launch --disk 10G --memory 3G --cpus 2 --name cp01 --network name=en0,mode=manual,mac="52:54:00:4b:ab:cd" --bridged file://../images/debian-13-generic-arm64.qcow2;
 
+echo "Creating cp01"
+multipass launch --disk 10G --memory 3G --cpus 2 --name cp01 --network name=en0,mode=manual,mac="52:54:00:4b:ab:cd" --bridged file://../images/debian-13-generic-arm64.qcow2
+
+echo "Transferring ./config/cluster-config.yaml to /home/ubuntu/cluster-config.yaml"
+multipass transfer ./config/cluster-config.yaml cp01:/home/ubuntu/cluster-config.yaml
+
+echo "Setting netplan for cp01"
 multipass exec -n cp01 -- sudo bash -c "cat << EOF > /etc/netplan/10-custom.yaml
 network:
   version: 2
@@ -67,7 +73,7 @@ multipass exec -n worker02 -- sudo netplan apply;
 
 # worker03
 
-multipass launch --disk 10G --memory 3G --cpus 2 --name worker03 --network name=en0,mode=manual,mac="52:54:00:4b:cd:ac" --bridgedfile://../images/debian-13-generic-arm64.qcow2;
+multipass launch --disk 10G --memory 3G --cpus 2 --name worker03 --network name=en0,mode=manual,mac="52:54:00:4b:cd:ac" --bridged file://../images/debian-13-generic-arm64.qcow2;
 
 multipass exec -n worker03 -- sudo bash -c "cat << EOF > /etc/netplan/10-custom.yaml
 network:
@@ -351,7 +357,7 @@ multipass exec -n worker03 -- sudo bash -c "crictl config runtime-endpoint unix:
 ";
 
 # Initialize the control plane; cp01 only
-multipass exec -n cp01 -- sudo bash -c "kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=${CP01_IP}";
+multipass exec -n cp01 -- sudo bash -c "kubeadm init --config /home/ubuntu/cluster-config.yaml";
 
 
 # configure kubectl context on cp01
